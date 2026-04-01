@@ -34,7 +34,7 @@ class Config(configparser.ConfigParser):
 
     """
 
-    def __init__(self, data=None, defaults=None, override=None):
+    def __init__(self, data=None, defaults=None, override=None, no_expand_vars=False):
         u"""Create a Config from in-memory data.
 
         Args:
@@ -47,9 +47,10 @@ class Config(configparser.ConfigParser):
             defaults: default values applied when a parameter is absent.
             override: a mapping of ``(section, name) -> value`` pairs that are
                 set unconditionally, overriding any value already present.
+            no_expand_vars: if True, do not expand environment variables in values.
 
         """
-        self.no_expand_vars = False
+        self.no_expand_vars = no_expand_vars
         configparser.ConfigParser.__init__(self,
                                            defaults=defaults,
                                            dict_type=collections.OrderedDict,
@@ -312,13 +313,7 @@ class IncludingConfigParser(Config):
     """
 
     def __init__(self, defaults=None, print_include_messages=True, no_expand_vars=False):
-        self.no_expand_vars = no_expand_vars
-        configparser.ConfigParser.__init__(self,
-                                   defaults=defaults,
-                                   dict_type=collections.OrderedDict,
-                                   strict=False,
-                                   inline_comment_prefixes=(';', '#'),
-                                   )
+        super().__init__(defaults=defaults, no_expand_vars=no_expand_vars)
         self.print_include_messages = print_include_messages
 
     def _read(self, fp, fpname):
@@ -345,9 +340,9 @@ class IncludingConfigParser(Config):
                 if not os.path.exists(filename):
                     raise ValueError(f"Tried to include non-existent file {filename}")
 
-                # read the contents of the ini file into a new instance
-                # of this class, then we will write it out
-                sub_ini = self.__class__(filename)
+                # read the contents of the ini file into a new Inifile instance,
+                # then we will write it out
+                sub_ini = Inifile(filename)
 
                 # write the whole other file content to our StringIO
                 sub_ini.write(s)
