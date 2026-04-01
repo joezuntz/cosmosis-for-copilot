@@ -1,6 +1,6 @@
 from ..runtime.attribution import PipelineAttribution
 from ..runtime.utils import get_git_revision
-from ..runtime import Inifile, logs
+from ..runtime import Config, Inifile, logs
 from ..output import InMemoryOutput
 import datetime
 import platform
@@ -40,7 +40,7 @@ class Sampler(metaclass=RegisteredSampler):
 
     
     def __init__(self, ini, pipeline, output=None):
-        if isinstance(ini, Inifile):
+        if isinstance(ini, Config):
             self.ini = ini
         else:
             self.ini = Inifile(ini)

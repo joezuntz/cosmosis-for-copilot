@@ -6,7 +6,7 @@ import os
 import pdb
 import cProfile
 import contextlib
-from .runtime.config import Inifile, CosmosisConfigurationError
+from .runtime.config import Config, Inifile, CosmosisConfigurationError
 from .runtime.pipeline import LikelihoodPipeline
 from .runtime import mpi_pool
 from .runtime import logs
@@ -95,7 +95,7 @@ def write_header_output(output, params, values, pipeline, values_override=None):
     # Do the same with the values file.
     # Unfortunately that means reading it in again;
     # if we ever refactor this bit we could eliminate that.
-    if isinstance(values, Inifile):
+    if isinstance(values, Config):
         values_ini = values
     elif values is None:
         values_ini=Inifile(pipeline.values_filename, override=values_override)
@@ -108,7 +108,7 @@ def write_header_output(output, params, values, pipeline, values_override=None):
     # And the same with the priors
     output.comment("START_OF_PRIORS_INI")
     for priors_file in pipeline.priors_files:
-        if isinstance(priors_file, Inifile):
+        if isinstance(priors_file, Config):
             prior_ini = priors_file
         else:
             prior_ini=Inifile(priors_file)

@@ -1,7 +1,7 @@
 #coding: utf-8
 
 
-u"""Definition of the :class:`Inifile` class."""
+u"""Definition of the :class:`Config` and :class:`Inifile` classes."""
 
 
 import os
@@ -19,7 +19,287 @@ class CosmosisConfigurationError(configparser.Error):
     """
     pass
 
-class IncludingConfigParser(configparser.ConfigParser):
+
+class Config(configparser.ConfigParser):
+    u"""A dictionary of `(section, name) -> value` pairs holding configuration information.
+
+    This class stores configuration data in a section/key structure and provides
+    typed accessors to retrieve values as strings, integers, floats, booleans, or
+    arrays.  It can be constructed directly from a dictionary or from another
+    :class:`Config` instance.
+
+    The values are all stored as strings internally, with methods provided to
+    locate and interpret them as integers, floating-point numbers, booleans, or
+    arrays of integers or floating-point numbers.
+
+    """
+
+    def __init__(self, data=None, defaults=None, override=None):
+        u"""Create a Config from in-memory data.
+
+        Args:
+            data: optional initial configuration data.  May be:
+
+                * ``None`` – create an empty configuration,
+                * a :class:`dict` mapping ``section -> {key: value}`` pairs, or
+                * another :class:`Config` instance to copy.
+
+            defaults: default values applied when a parameter is absent.
+            override: a mapping of ``(section, name) -> value`` pairs that are
+                set unconditionally, overriding any value already present.
+
+        """
+        self.no_expand_vars = False
+        configparser.ConfigParser.__init__(self,
+                                           defaults=defaults,
+                                           dict_type=collections.OrderedDict,
+                                           strict=False,
+                                           inline_comment_prefixes=(';', '#'),
+                                           )
+
+        if isinstance(data, dict):
+            for section, values in data.items():
+                self.add_section(section)
+                for key, value in values.items():
+                    self.set(section, key, str(value))
+        elif isinstance(data, Config):
+            # This seems to be the only way to preserve the
+            # defaults.
+            # https://stackoverflow.com/questions/23416370/manually-building-a-deep-copy-of-a-configparser-in-python-2-7
+            s = io.StringIO()
+            data.write(s)
+            s.seek(0)
+            self.read_file(s)
+        elif data is not None:
+            raise TypeError(f"Config data must be a dict or Config instance, not {type(data)}")
+
+        if override:
+            for section, name in override:
+                if section == "DEFAULT":
+                    self._defaults[name] = override[(section, name)]
+                else:
+                    if not self.has_section(section):
+                        self.add_section(section)
+                    self.set(section, name, override[(section, name)])
+
+    def __iter__(self):
+        u"""Iterate over all the parameters.
+
+        The value of the iterator is `((section, name), value)`.
+
+        """
+        return (((section, name), value) for section in self.sections()
+                for name, value in self.items(section))
+
+    def items(self, section, raw=False, vars=None, defaults=True):
+        u"""Return a list of pairs (key, value) from all the options in a given `section`.
+
+        If raw is set, do not replace values which are set using the ini file
+        interpolation syntax %(name)s.
+
+        If vars is set to a dictionary, use it as an additional source of options.
+
+        If defaults is True (the default), parameters in the [DEFAULT] section are
+        included in all other sections.
+
+        """
+        if defaults:
+            return configparser.ConfigParser.items(self, section, raw=raw, vars=vars)
+        else:
+            d = collections.OrderedDict()
+            try:
+                d.update(self._sections[section])
+            except KeyError:
+                if section != configparser.DEFAULTSECT:
+                    raise configparser.NoSectionError(section)
+            # Update with the entry specific variables
+            if vars:
+                for key, value in list(vars.items()):
+                    d[self.optionxform(key)] = value
+            options = list(d.keys())
+            if raw:
+                return [(option, d[option])
+                        for option in options]
+            else:
+                return [(option, self._interpolate_compatibility(section, option, d[option], d))
+                        for option in options]
+
+    def _interpolate_compatibility(self, section, option, value, d):
+        # More recent versions of python have an object called _interpolation to customize interpolation
+        # behaviour, instead of the old _interpolate method. We support both here.
+        if self.no_expand_vars:
+            return value
+        elif hasattr(self, "_interpolate"):
+            return self._interpolate(section, option, value, d)
+        else:
+            d = self._unify_values(section, {})
+            return self._interpolation.before_get(self, section, option, value, d)
+
+    def get(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
+
+        u"""Get a value as a string, or `default` if the value is not in the dictionary.
+
+        If the `default` is not set and is needed, an error with a message
+        to the user will be raised. (`None` is *not* acceptable as a
+        default).
+
+        """
+        try:
+            return configparser.ConfigParser.get(self, section, option, raw=raw, vars=vars, fallback=fallback)
+        except (configparser.NoSectionError, configparser.NoOptionError) as e:
+            if fallback is configparser._UNSET:
+                raise CosmosisConfigurationError("CosmoSIS looked for an option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
+            else:
+                return fallback
+
+    def __getitem__(self, key: tuple):
+        section, option = key
+        return self.get(section, option)
+
+    def __setitem__(self, key: tuple, value: str):
+        section, option = key
+        self.set(section, option, str(value))
+
+    # these functions override the default parsers to allow for extra formats
+    def getint(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
+        u"""Get a value as an integer, or return `default` if the value is not found.
+
+        If the `default` is not set and is needed, an error with a message
+        to the user will be raised. (`None` is *not* acceptable as a
+        default).
+
+        """
+        try:
+            return configparser.ConfigParser.getint(self, section, option, raw=raw, vars=vars, fallback=fallback)
+        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
+            if fallback is configparser._UNSET:
+                raise CosmosisConfigurationError("CosmoSIS looked for an integer option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
+            elif not isinstance(fallback, int):
+                raise TypeError("Default not integer")
+            else:
+                return fallback
+
+    def getfloat(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
+        u"""Get a floating-point value from the dictionary, with `default`.
+
+        If the value is not found in the dictionary and `default` is
+        specified, then `default` will be returned.  Otherwise an error
+        will be thrown with a useful message for the user.
+
+        """
+        try:
+            return configparser.ConfigParser.getfloat(self, section, option, raw=raw, vars=vars, fallback=fallback)
+        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
+            if fallback is configparser._UNSET:
+                raise CosmosisConfigurationError("CosmoSIS looked for a float option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
+            elif not isinstance(fallback, float):
+                raise TypeError("Default not float")
+            else:
+                return fallback
+
+    def getboolean(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
+        u"""Interpret a parameter as a boolean, including symbolic values.
+
+        This essentially allows a configuration file to represent boolean
+        values in the most convenient manner ('true', 'n', etc) as well as
+        with zero/non-zero numerical values.
+
+        If the parameter is not found in the dictionary, then `default`
+        will be returned, which will itself default to `False` if not
+        specified.
+
+        """
+        try:
+            return configparser.ConfigParser.getboolean(self, section, option, raw=raw, vars=vars, fallback=fallback)
+        except ValueError:
+            # additional options t/y/n/f
+            value = self.get(section, option).lower()
+            if value in ['y', 'yes', 't', 'true']:
+                return True
+            elif value in ['n', 'no', 'f', 'false']:
+                return False
+            else:
+                raise ValueError("Unable to parse parameter "
+                                 "%s--%s = %s into boolean form"
+                                 % (section, option, value))
+        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
+            if fallback is configparser._UNSET:
+                raise CosmosisConfigurationError("CosmoSIS looked for a boolean (T/F) option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
+            elif not isinstance(fallback, bool):
+                raise TypeError("Default not boolean")
+            else:
+                return fallback
+
+    def gettyped(self, section, name):
+        u"""Best-guess the type of a parameter and return it as that type.
+
+        The method will try parsing the value as, in this order:
+            an integer or list of integers,
+            a float or list of floats,
+            a complex number or list of complex numbers,
+            a boolean,
+            a string.
+
+        The string value is the fallback if all else fails.
+        """
+
+        import re
+
+        value = configparser.ConfigParser.get(self, section, name)
+        value = value.strip()
+        # There isn't really a sensible thing to return for this,
+        # so we just need to set it to None.
+        if not value: return None
+        # try quoted string
+        m = re.match(r"^(['\"])(.*?)\1$", value)
+        if m is not None:
+            return m.group(2)
+
+        value_list = value.split()
+
+        # Try to match integer array.  This will fail whenever a decimal
+        # point occurs anywhere in the list of values.
+        try:
+            parsed = [int(s) for s in value_list]
+            if len(parsed) == 1:
+                return parsed[0]
+            else:
+                return parsed
+        except ValueError:
+            pass
+
+        # try to match float array
+        try:
+            parsed = [float(s) for s in value_list]
+            if len(parsed) == 1:
+                return parsed[0]
+            else:
+                return parsed
+        except ValueError:
+            pass
+
+        # try to match complex array
+        try:
+            parsed = [complex(s) for s in value_list]
+            if len(parsed) == 1:
+                return parsed[0]
+            else:
+                return parsed
+        except ValueError:
+            pass
+
+        # try to match boolean (no array support)
+
+        try:
+            return self.getboolean(section, name)
+        except ValueError:
+            pass
+
+        # default to string
+        return value
+
+
+class IncludingConfigParser(Config):
     u"""Extension of built-in python :class:`ConfigParser` to %include other files.
 
     Use the line: %include filename.ini This is assumed to end a section,
@@ -82,7 +362,7 @@ class IncludingConfigParser(configparser.ConfigParser):
 
 class Inifile(IncludingConfigParser):
 
-    u"""A dictionary of `(section, name) -> value` pairs corresponding to entries in a .ini file.
+    u"""Reads a .ini file and makes its contents available as a :class:`Config`.
 
     The class is designed to hide the details of parsing .ini files, and
     then for creating :class:`DataBlock` objects (which wrap C objects
@@ -90,9 +370,8 @@ class Inifile(IncludingConfigParser):
     written in C) via the :class:`Pipeline` and then :class:`Module`
     constructors (see `Pipeline.__init__()`).
 
-    The values are all stored as strings, with methods provided to locate
-    and interpret them as integers, floating-point numbers, booleans, or
-    arrays of integers or floating-point numbers.
+    Configuration data is accessed through the methods inherited from
+    :class:`Config`.
 
     """
 
@@ -107,6 +386,14 @@ class Inifile(IncludingConfigParser):
         Where supplied, `defaults` and `override` should be dictionary
         mappings of `(section, name) -> value`.
 
+        `filename` may be:
+
+        * a path to an .ini file (string),
+        * a :class:`Config` instance to copy,
+        * a :class:`dict` mapping ``section -> {key: value}``,
+        * a file-like object with a ``read()`` method, or
+        * ``None`` for an empty configuration.
+
         """
 
         IncludingConfigParser.__init__(self,
@@ -114,13 +401,13 @@ class Inifile(IncludingConfigParser):
                                        print_include_messages=print_include_messages,
                                        no_expand_vars=no_expand_vars)
 
-        # if we are pased a dict, convert it to an inifile
+        # if we are passed a dict, populate section by section
         if isinstance(filename, dict):
             for section, values in filename.items():
                 self.add_section(section)
                 for key, value in values.items():
                     self.set(section, key, str(value))
-        elif isinstance(filename, Inifile):
+        elif isinstance(filename, Config):
             # This seems to be the only way to preserve the
             # defaults.
             # https://stackoverflow.com/questions/23416370/manually-building-a-deep-copy-of-a-configparser-in-python-2-7
@@ -133,15 +420,15 @@ class Inifile(IncludingConfigParser):
         # default read behaviour is to ignore unreadable files which
         # is probably not what we want here
         elif filename is not None:
-            if isinstance(filename,str) and not os.path.exists(filename):
+            if isinstance(filename, str) and not os.path.exists(filename):
                 raise IOError("Unable to open configuration file `" + filename + "'")
             self.read(filename)
 
         # override parameters
         if override:
             for section, name in override:
-                if section=="DEFAULT":
-                    self._defaults[name] = override[(section,name)]
+                if section == "DEFAULT":
+                    self._defaults[name] = override[(section, name)]
                 else:
                     if not self.has_section(section):
                         self.add_section(section)
@@ -152,225 +439,3 @@ class Inifile(IncludingConfigParser):
         u"""Create an Inifile from a list of lines."""
         s = io.StringIO("\n".join(lines))
         return cls(s, *args, **kwargs)
-
-    def __iter__(self):
-        u"""Iterate over all the parameters.
-
-        The value of the iterator is `((section, name), value)`.
-
-        """
-        return (((section, name), value) for section in self.sections()
-                for name, value in self.items(section))
-
-
-
-    def items(self, section, raw=False, vars=None, defaults=True):
-        u"""Return a list of pairs (key, value) from all the options in a given `section`.
-
-        If raw is set, do not replace values which are set using the ini file 
-        interpolation syntax %(name)s.
-
-        If vars is set to a dictionary, use it as an additional source of options.
-
-        If defaults is True (the default), parameters in the [DEFAULT] section are included
-        in all other sections.
-
-
-        """
-        if defaults:
-            return IncludingConfigParser.items(self, section, raw=raw, vars=vars)
-        else:
-            d = collections.OrderedDict()
-            try:
-                d.update(self._sections[section])
-            except KeyError:
-                if section != configparser.DEFAULTSECT:
-                    raise configparser.NoSectionError(section)
-            # Update with the entry specific variables
-            if vars:
-                for key, value in list(vars.items()):
-                    d[self.optionxform(key)] = value
-            options = list(d.keys())
-            if raw:
-                return [(option, d[option])
-                        for option in options]
-            else:
-                return [(option, self._interpolate_compatibility(section, option, d[option], d))
-                        for option in options]
-
-    def _interpolate_compatibility(self, section, option, value, d):
-        # More recent versions of python have an object called _interpolation to customize interpolation
-        # behaviour, instead of the old _interpolate method. We support both here.
-        if self.no_expand_vars:
-            return value
-        elif hasattr(self, "_interpolate"):
-            return self._interpolate(section, option, value, d)
-        else:
-            d = self._unify_values(section, {})
-            return self._interpolation.before_get(self, section, option, value, d)
-
-
-    def get(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
-
-        u"""Get a value as a string, or `default` if the value is not in the dictionary.
-
-        If the `default` is not set and is needed, an error with a message
-        to the user will be raised. (`None` is *not* acceptable as a
-        default).
-
-        """
-        try:
-            return IncludingConfigParser.get(self, section, option, raw=raw, vars=vars, fallback=fallback)
-        except (configparser.NoSectionError, configparser.NoOptionError) as e:
-            if fallback is configparser._UNSET:
-                raise CosmosisConfigurationError("CosmoSIS looked for an option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
-            else:
-                return fallback
-            
-    def __getitem__(self, key: tuple):
-        section, option = key
-        return self.get(section, option)
-
-    def __setitem__(self, key: tuple, value: str):
-        section, option = key
-        self.set(section, option, str(value))
-
-    # these functions override the default parsers to allow for extra formats
-    def getint(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
-        u"""Get a value as an integer, or return `default` if the value is not found.
-        
-        If the `default` is not set and is needed, an error with a message
-        to the user will be raised. (`None` is *not* acceptable as a
-        default).
-
-        """
-        try:
-            return IncludingConfigParser.getint(self, section, option, raw=raw, vars=vars, fallback=fallback)
-        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
-            if fallback is configparser._UNSET:
-                raise CosmosisConfigurationError("CosmoSIS looked for an integer option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
-            elif not isinstance(fallback, int):
-                raise TypeError("Default not integer")
-            else:
-                return fallback
-
-    def getfloat(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
-        u"""Get a floating-point value from the dictionary, with `default`.
-
-        If the value is not found in the dictionary and `default` is
-        specified, then `default` will be returned.  Otherwise an error
-        will be thrown with a useful message for the user.
-
-        """
-        try:
-            return IncludingConfigParser.getfloat(self, section, option, raw=raw, vars=vars, fallback=fallback)
-        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
-            if fallback is configparser._UNSET:
-                raise CosmosisConfigurationError("CosmoSIS looked for a float option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
-            elif not isinstance(fallback, float):
-                raise TypeError("Default not float")
-            else:
-                return fallback
-
-    def getboolean(self, section, option, raw=False, vars=None, fallback=configparser._UNSET):
-        u"""Interpret a parameter as a boolean, including symbolic values.
-
-        This essentially allows a configuration file to represent boolean
-        values in the most convenient manner (‘true’, ‘n’, etc) as well as
-        with zero/non-zero numerical values.
-
-        If the parameter is not found in the dictionary, then `default`
-        will be returned, which will itself default to `False` if not
-        specified.
-
-        """
-        try:
-            return IncludingConfigParser.getboolean(self, section, option, raw=raw, vars=vars, fallback=fallback)
-        except ValueError:
-            # additional options t/y/n/f
-            value = self.get(section, option).lower()
-            if value in ['y', 'yes', 't','true']:
-                return True
-            elif value in ['n', 'no', 'f', 'false']:
-                return False
-            else:
-                raise ValueError("Unable to parse parameter "
-                                 "%s--%s = %s into boolean form"
-                                 % (section, option, value))
-        except (configparser.NoSectionError, configparser.NoOptionError, CosmosisConfigurationError) as e:
-            if fallback is configparser._UNSET:
-                raise CosmosisConfigurationError("CosmoSIS looked for a boolean (T/F) option called '%s' in the '[%s]' section, but it was not in the ini file"%(option,section))
-            elif not isinstance(fallback, bool):
-                raise TypeError("Default not boolean")
-            else:
-                return fallback
-
-
-
-    def gettyped(self, section, name):
-        u"""Best-guess the type of a parameter and return it as that type.
-
-        The method will try parsing the value as, in this order:
-            an integer or list of integers,
-            a float or list of floats,
-            a complex number or list of complex numbers,
-            a boolean,
-            a string.
-
-        The string value is the fallback if all else fails.
-        """
-
-        import re
-
-        value = IncludingConfigParser.get(self, section, name)
-        value = value.strip()
-        # There isn't really a sensible thing to return for this,
-        # so we just need to set it to None.
-        if not value: return None
-        # try quoted string
-        m = re.match(r"^(['\"])(.*?)\1$", value)
-        if m is not None:
-            return m.group(2)
-
-        value_list = value.split()
-
-        # Try to match integer array.  This will fail whenever a decimal
-        # point occurs anywhere in the list of values.
-        try:
-            parsed = [int(s) for s in value_list]
-            if len(parsed) == 1:
-                return parsed[0]
-            else:
-                return parsed
-        except ValueError:
-            pass
-
-        # try to match float array
-        try:
-            parsed = [float(s) for s in value_list]
-            if len(parsed) == 1:
-                return parsed[0]
-            else:
-                return parsed
-        except ValueError:
-            pass
-
-        # try to match complex array
-        try:
-            parsed = [complex(s) for s in value_list]
-            if len(parsed) == 1:
-                return parsed[0]
-            else:
-                return parsed
-        except ValueError:
-            pass
-
-        # try to match boolean (no array support)
-
-        try:
-            return self.getboolean(section, name)
-        except ValueError:
-            pass
-
-        # default to string
-        return value
