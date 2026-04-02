@@ -221,7 +221,7 @@ class Parameter(object):
         regardless of the file contents.
 
         """
-        if isinstance(value_file, config.Inifile):
+        if isinstance(value_file, config.Config):
             values_ini = value_file
         else:
             values_ini = config.Inifile(value_file)

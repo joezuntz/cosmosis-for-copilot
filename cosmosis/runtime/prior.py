@@ -126,10 +126,10 @@ class Prior(object):
         """
         priors = {}
         for f in prior_files:
-            if isinstance(f, config.Inifile):
+            if isinstance(f, config.Config):
                 ini = f
             else:
-                ini = config.Inifile(f) 
+                ini = config.Inifile(f)
             for option, value in ini:
                 if option in priors:
                     raise ValueError("Duplicate prior identified")

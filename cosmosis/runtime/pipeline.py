@@ -355,7 +355,7 @@ class Pipeline(object):
         if arg is None:
             arg = list()
 
-        if isinstance(arg, config.Inifile):
+        if isinstance(arg, config.Config):
             self.options = arg
         else:
             self.options = config.Inifile(arg)
@@ -777,7 +777,7 @@ class LikelihoodPipeline(Pipeline):
                                             "priors", fallback="").split()
             self.priors_files = priors_files
         else:
-            if isinstance(priors, config.Inifile):
+            if isinstance(priors, config.Config):
                 priors = [priors]
             self.priors_files = priors
         self.parameters = parameter.Parameter.load_parameters(self.values_file,

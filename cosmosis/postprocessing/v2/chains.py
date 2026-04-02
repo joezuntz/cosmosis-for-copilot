@@ -9,7 +9,7 @@ These APIs will change and should not yet be relied on.
 
 """
 from cosmosis.runtime.utils import import_by_path
-from cosmosis import Inifile, output as output_module
+from cosmosis import Config, Inifile, output as output_module
 import numpy as np
 from io import StringIO
 import os
@@ -41,7 +41,7 @@ class Chain:
 
     @classmethod
     def load(cls, inputs, name=None, **options):
-        if isinstance(inputs, Inifile):
+        if isinstance(inputs, Config):
             name_, sampler, colnames, data, metadata, comments, final_metadata = (
                 cls.load_ini(inputs)
             )
