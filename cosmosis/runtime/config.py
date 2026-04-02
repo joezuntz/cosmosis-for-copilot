@@ -446,7 +446,9 @@ class IncludingConfigParser(configparser.ConfigParser):
 
                 # read the contents of the ini file into a new Inifile instance,
                 # then we will write it out
-                sub_ini = Inifile(filename)
+                sub_ini = Inifile(filename,
+                                  print_include_messages=self.print_include_messages,
+                                  no_expand_vars=self.no_expand_vars)
 
                 # write the whole other file content to our StringIO
                 sub_ini.write(s)
